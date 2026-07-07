@@ -1,0 +1,25 @@
+&uart4 {
+    /delete-property/ reg;
+    /delete-property/ interrupts;
+
+    reg = <0x30880000 0x4000>;
+    interrupts = <28 0>; 
+    status = "okay";
+    current-speed = <115200>;
+
+    pinctrl-0 = <&uart3_dummy>;
+    pinctrl-names = "default";
+};
+
+/ {
+    pinctrl {
+        uart3_dummy: uart3_dummy {
+
+        };
+    };
+
+    chosen {
+        zephyr,app-uart = &uart4;
+        zephyr,console = &uart4;
+    };
+};

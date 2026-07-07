@@ -1,0 +1,25 @@
+#include <zephyr/dt-bindings/gpio/gpio.h>
+
+/ {
+	aliases {
+		led0 = &pin11_blink;
+	};
+
+	leds {
+		compatible = "gpio-leds";
+		pin11_blink: led_1 {
+			/* Lấy trực tiếp controller &gpio1 từ board dts gốc */
+			gpios = <&gpio5 9 GPIO_ACTIVE_LOW>;
+			label = "Pin 11 Blinky";
+		};
+	};
+};
+
+/* Kích hoạt khối GPIO 1 đã được định nghĩa sẵn trong hệ thống */
+&gpio1 {
+	status = "okay";
+};
+
+&gpio5 {
+	status = "okay";
+};
