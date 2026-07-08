@@ -1,25 +1,32 @@
+&pinctrl {
+	uart3_ecspi1_default: uart3_ecspi1_default {
+		group0 {
+			pinmux = <&iomuxc_ecspi1_sclk_uart_rx_uart3_rx>,
+				 <&iomuxc_ecspi1_mosi_uart_tx_uart3_tx>;
+			bias-pull-up;
+			slew-rate = "slow";
+			drive-strength = "x1";
+		};
+	};
+};
+
 &uart4 {
-    /delete-property/ reg;
-    /delete-property/ interrupts;
+	/delete-property/ reg;
+	/delete-property/ interrupts;
 
-    reg = <0x30880000 0x4000>;
-    interrupts = <28 0>; 
-    status = "okay";
-    current-speed = <115200>;
+	reg = <0x30880000 0x4000>;
+	interrupts = <28 0>;
+	clocks = <&ccm IMX_CCM_UART3_CLK 0x6c 24>;
+	status = "okay";
+	current-speed = <115200>;
 
-    pinctrl-0 = <&uart3_dummy>;
-    pinctrl-names = "default";
+	pinctrl-0 = <&uart3_ecspi1_default>;
+	pinctrl-names = "default";
 };
 
 / {
-    pinctrl {
-        uart3_dummy: uart3_dummy {
-
-        };
-    };
-
-    chosen {
-        zephyr,app-uart = &uart4;
-        zephyr,console = &uart4;
-    };
+	chosen {
+		zephyr,app-uart = &uart4;
+		zephyr,console = &uart4;
+	};
 };
