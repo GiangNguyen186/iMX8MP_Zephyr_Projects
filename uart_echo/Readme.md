@@ -219,17 +219,27 @@ Header `imx_ccm.h` (chứa định nghĩa `IMX_CCM_UART3_CLK`) đã được inc
 
 ## Boot scripting
 Sau khi đã sửa toàn bộ chỉ cần boot bằng 
+
 	fatload mmc 1:1 0x48000000 zephyr.bin
+	
 	cp.b 0x48000000 0x7e0000 <zephyr.bin size>
+	
    	bootaux 0x7e0000
 
 Hoặc gõ trên U-boot console như sau:
+
 	u-boot=> setenv mmcdev 1
+	
 	u-boot=> setenv m7image zephyr.bin
+	
 	u-boot=> setenv m7loadaddr 0x48000000
+	
 	u-boot=> setenv m7runaddr 0x7e0000
+	
 	u-boot=> setenv bootm7 'mmc dev ${mmcdev}; fatload mmc ${mmcdev}:1 ${m7loadaddr} ${m7image}; cp.b ${m7loadaddr} ${m7runaddr} ${filesize}; bootaux ${m7runaddr}'
+	
 	u-boot=> setenv bootcmd 'run bootm7; run distro_bootcmd'
+	
 	u-boot=> saveenv
 
 ---
