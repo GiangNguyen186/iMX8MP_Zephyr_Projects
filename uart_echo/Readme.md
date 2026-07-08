@@ -217,12 +217,25 @@ Header `imx_ccm.h` (chứa định nghĩa `IMX_CCM_UART3_CLK`) đã được inc
 
 ---
 
+## Boot scripting
+Sau khi đã sửa toàn bộ chỉ cần boot bằng 
+	fatload mmc 1:1 0x48000000 zephyr.bin
+	cp.b 0x48000000 0x7e0000 <zephyr.bin size>
+   	bootaux 0x7e0000
+
+Hoặc gõ trên U-boot console như sau:
+	u-boot=> setenv mmcdev 1
+	u-boot=> setenv m7image zephyr.bin
+	u-boot=> setenv m7loadaddr 0x48000000
+	u-boot=> setenv m7runaddr 0x7e0000
+	u-boot=> setenv bootm7 'mmc dev ${mmcdev}; fatload mmc ${mmcdev}:1 ${m7loadaddr} ${m7image}; cp.b ${m7loadaddr} ${m7runaddr} ${filesize}; bootaux ${m7runaddr}'
+	u-boot=> setenv bootcmd 'run bootm7; run distro_bootcmd'
+	u-boot=> saveenv
+
 ## Bài học rút ra
 
 1. **Không nên poke thanh ghi IOMUXC thủ công từ U-Boot** rồi hy vọng Zephyr "không đụng vào" — cách bền vững là định nghĩa đúng trong devicetree để chính Zephyr tự cấu hình lại mỗi lần boot, tránh phụ thuộc trạng thái sót lại từ bootloader.
 2. Khi **remap một peripheral node** (đổi `reg`/`interrupts` để trỏ sang phần cứng vật lý khác), phải rà soát **toàn bộ property phụ thuộc phần cứng** đi kèm — không chỉ `reg`/`interrupts`/`pinctrl`, mà cả `clocks`, vì driver có thể đọc trực tiếp thanh ghi phần cứng dựa trên ID clock khai báo trong devicetree, độc lập với `reg`.
 3. Triệu chứng **"im lặng hoàn toàn"** thường chỉ ra vấn đề ở tầng **pinmux/routing** (chưa có đường tín hiệu vật lý); triệu chứng **"có tín hiệu nhưng dữ liệu sai/vỡ"** thường chỉ ra vấn đề ở tầng **clock/baudrate** — hai tầng lỗi độc lập, cần tách riêng để debug đúng hướng.
 4. Bảng pinmux tự sinh bởi công cụ chính thức của NXP (trong `hal_nxp`, dùng bởi Zephyr SDK) là nguồn tham chiếu đáng tin cậy nhất cho địa chỉ thanh ghi IOMUXC — nên đối chiếu tại đây trước khi tự tra cứu bằng tay từ reference manual.
-5. Sau khi đã sửa toàn bộ chỉ cần boot bằng fatload mmc 1:1 0x48000000 zephyr.bin
-											cp.b 0x48000000 0x7e0000 <zephyr.bin size>
-   											bootaux 0x7e0000
+
