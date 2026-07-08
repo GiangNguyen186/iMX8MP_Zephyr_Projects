@@ -232,6 +232,8 @@ Hoặc gõ trên U-boot console như sau:
 	u-boot=> setenv bootcmd 'run bootm7; run distro_bootcmd'
 	u-boot=> saveenv
 
+---
+
 ## Bài học rút ra
 
 1. **Không nên poke thanh ghi IOMUXC thủ công từ U-Boot** rồi hy vọng Zephyr "không đụng vào" — cách bền vững là định nghĩa đúng trong devicetree để chính Zephyr tự cấu hình lại mỗi lần boot, tránh phụ thuộc trạng thái sót lại từ bootloader.
