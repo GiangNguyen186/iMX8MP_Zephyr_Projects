@@ -163,7 +163,7 @@ west build -p always -b imx8mp_evk/mimx8ml8/m7 .
 
 ## 4. Kịch bản Tự động Khởi động lõi M7 từ U-Boot (Autoboot Script)
 
-Thay vì phải gõ thủ công chuỗi lệnh cấu hình thanh ghi phức tạp mỗi lần bật nguồn bo mạch, chúng ta sẽ đóng gói toàn bộ quy trình cấu hình Clock, định tuyến chân vật lý của i.MX8MP, nạp trung chuyển file từ thẻ nhớ MicroSD và kích hoạt lõi M7 thông qua việc tạo một biến môi trường Macro tự chạy trong U-Boot.
+Để hệ thống tự động thiết lập và khởi chạy lõi M7 mỗi khi bật nguồn mà không cần gõ lệnh thủ công, chúng ta sẽ đóng gói toàn bộ quy trình vào các biến môi trường của U-Boot. Phương pháp này sử dụng kỹ thuật nạp trung gian qua RAM rồi sao chép vào bộ nhớ nội bộ TCM để tránh lỗi sập nguồn (RDC crash) khi phân giải file ELF.
 
 Bạn mở cổng **COM4**, bật nguồn bo mạch và nhấn một phím bất kỳ để dừng quá trình boot tự động, truy cập vào dấu nhắc lệnh `u-boot=>`. Tiến hành copy và chạy khối lệnh sau:
 
@@ -178,17 +178,25 @@ u-boot=> saveenv
 
 ```
 
----
+### Bản chất hoạt động của Script:
 
-### Cơ chế hoạt động của Script tự động:
-
-1. **Thiết lập hạ tầng:** Hạ tần số clock UART3 về mức an toàn 24 MHz từ U-Boot.
+* **Khai báo biến tường minh:** Việc đặt riêng các biến như `mmcdev`, `m7image`, `m7loadaddr` (`0x48000000`), và `m7runaddr` (`0x7e0000`) giúp kịch bản boot trở nên module hóa, dễ dàng thay đổi tên file hoặc địa chỉ nạp khi cần thiết.
 
 
-2. **Định tuyến Pinmux dự phòng:** Đục tường cấu hình các thanh ghi vật lý (`0x303301e0`, `0x303301e4`, `0x303305f8`) để mở sẵn đường vật lý cho cổng COM5 trước khi hệ điều hành Zephyr chiếm quyền kiểm soát toàn diện.
+* **`mmc dev ${mmcdev}`:** Khởi thám và chuyển sang đúng chỉ số thiết bị thẻ nhớ MMC/SD đang chứa firmware để tránh lỗi nhận diện sai ổ đĩa.
 
 
-3. **Kiểm tra và Nạp:** Lệnh `fatload` sẽ kiểm tra phân vùng `1:1` trên thẻ nhớ. Nếu tìm thấy file `zephyr.bin`, nó sẽ nạp tạm vào địa chỉ RAM an toàn `0x80000000`.
+* **`fatload mmc ...`:** Đọc file phẳng `zephyr.bin` từ phân vùng FAT của thẻ nhớ và tải tạm vào địa chỉ RAM trung gian an toàn là `0x48000000`.
 
 
+* **`cp.b ${m7loadaddr} ${m7runaddr} ${filesize}`:** Thực hiện sao chép từng byte dữ liệu từ RAM vào vùng nhớ nội bộ TCM (`0x7e0000`) của lõi M7 dựa theo đúng dung lượng thực tế của file thông qua biến tự động `${filesize}`. Cơ chế sao chép thô này giúp bypass qua bộ bảo vệ RDC (Resource Domain Controller) vốn là nguyên nhân gây sập nguồn khi ghi trực tiếp từ lệnh phân tích ELF.
+
+
+* **`bootaux ${m7runaddr}`:** Kích hoạt lõi phụ Cortex-M7 bắt đầu khởi chạy ứng dụng độc lập ngay tại địa chỉ gốc TCM.
+
+
+* **Tích hợp vào `bootcmd`:** Chèn macro `run bootm7` vào trước lệnh khởi động mặc định `run distro_bootcmd`. Nhờ đó, lõi M7 sẽ luôn được đánh thức trước khi hệ thống tiếp tục tải hệ điều hành của lõi chính A53 một cách song song.
+
+
+* **`saveenv`:** Lưu vĩnh viễn các cấu hình biến môi trường này vào bộ nhớ Flash/ROM của bo mạch để kịch bản tự chạy ở những lần bật nguồn tiếp theo.
 4. **Kích hoạt:** Lệnh `bootaux 0x80000000` lập tức giải phóng trạng thái Reset của lõi Cortex-M7, ép lõi phụ nhảy vào thực thi firmware ứng dụng độc lập. Sau đó, hệ thống tiếp tục trả quyền điều khiển cho lệnh `orig_bootcmd` để lõi chính A53 tải hệ điều hành Linux một cách song song, độc lập và mượt mà.
