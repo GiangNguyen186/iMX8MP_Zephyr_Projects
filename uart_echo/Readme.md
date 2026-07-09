@@ -1,184 +1,49 @@
-# Báo cáo Debug: UART3 Echo trên Cortex-M7 (Zephyr) — i.MX8MP LPDDR4 EVK
-
-**Mục tiêu:** Chạy ứng dụng UART Echo trên lõi Cortex-M7 (Zephyr OS), giao tiếp với laptop qua UART3 vật lý (được route qua các chân `ECSPI1_SCLK`/`ECSPI1_MOSI`), baudrate 115200.
-
-**Board:** i.MX8MP LPDDR4 EVK — U-Boot (A53) nạp và khởi động Zephyr trên M7 qua `bootaux`.
+# BÁO CÁO KỸ THUẬT: HIỆN THỰC GIAO THỨC UART3 ECHO ĐỘC LẬP TRÊN LÕI PHỤ CORTEX-M7 (ZEPHYR OS)
 
 ---
 
-## Tổng quan các lỗi đã gặp (theo thứ tự xử lý)
+## 1. Giải thích chi tiết File Cấu hình Phần cứng (`app.overlay`)
 
-|#|Lỗi|Nguyên nhân gốc|Trạng thái|
-|---|---|---|---|
-|1|`zephyr.bin` đứng im ở 18664 bytes dù sửa code|Build cache / thiếu pristine rebuild|Đã hướng dẫn xử lý|
-|2|`bootelf` làm U-Boot crash (`ESR 0xbf000002`)|RDC (Resource Domain Controller) chặn ghi vùng TCM|Đã hướng dẫn né bằng `cp.b` + `bootaux`|
-|3|`bootaux` chạy được (PC hợp lệ) nhưng UART3 **im lặng hoàn toàn**|pinctrl overlay dùng node **rỗng**, không cấu hình chân vật lý nào|✅ Đã sửa|
-|4|`mmc 0` không tồn tại khi `fatload`|Sai chỉ số thiết bị MMC (nhầm eMMC ↔ khe SD rời)|Đã hướng dẫn `mmc list`|
-|5|UART3 có tín hiệu nhưng ký tự ra **vỡ vụn** (baudrate sai)|Overlay đổi `reg`/`interrupts` sang UART3 nhưng **quên đổi `clocks`**, driver vẫn đọc clock root của UART4|✅ Đã sửa — **kết quả cuối cùng: THÀNH CÔNG**|
+Để đảm bảo tính toàn vẹn của hệ thống và không chiếm dụng tài nguyên của cổng UART4, file `app.overlay` được thiết kế chia làm 4 khối logic độc lập, tường minh:
 
----
-
-## Chi tiết từng lỗi
-
-### File `zephyr.bin` không cập nhật (đứng im ở 18664 bytes)
-
-**Triệu chứng:** Dù sửa `main.c` (kể cả ghi đè thanh ghi cứng), dung lượng file build ra vẫn không đổi.
-
-**Cách phát hiện:** So sánh kích thước/`md5sum` của `zephyr.bin` trước và sau khi build lại.
-
-**Nguyên nhân khả dĩ:**
-
-- `west build` không nhận diện thay đổi do cache CMake/ninja cũ.
-- SD card chưa được `sync`/eject an toàn trước khi rút → hệ điều hành host còn giữ bản cache cũ trong buffer.
-- Ghi thanh ghi trực tiếp không khai báo `volatile` → trình biên dịch tối ưu hóa (dead code elimination) loại bỏ đoạn code, khiến các lần sửa "không có tác dụng" dù logic khác nhau.
-
-**Giải pháp:**
-
-```bash
-west build -p always -b <board_target> .
-ls -la build/zephyr/zephyr.bin
-md5sum build/zephyr/zephyr.bin      # xác nhận đổi so với lần trước
-```
-
-- Dùng `sys_write32()`/`sys_read32()` (đã có `volatile` built-in) thay vì tự khai báo con trỏ thường khi ghi thanh ghi cứng.
-- Luôn `sync` hoặc eject an toàn SD card trước khi rút.
-
----
-
-### `bootelf` làm U-Boot crash — `"Error" handler, esr 0xbf000002`
-
-**Triệu chứng:** Khi dùng `bootelf` để nạp trực tiếp file `.elf` vào vùng TCM, U-Boot lập tức crash và reset toàn hệ thống.
-
-**Nguyên nhân:** `bootelf` là trình phân giải ELF tổng quát, không biết rằng vùng TCM của M7 bị **RDC (Resource Domain Controller)** khóa quyền ghi từ domain A53. Việc ghi trực tiếp gây ra external abort phần cứng.
-
-**Giải pháp:** Không dùng `bootelf` cho core phụ M7. Dùng cách chuẩn của NXP — convert sang binary phẳng rồi copy thủ công vào alias địa chỉ TCM, sau đó `bootaux` (đã có sẵn cơ chế giữ/release reset M7 đúng chuẩn, tôn trọng RDC):
-
-```bash
-fatload mmc <dev>:1 0x48000000 zephyr.bin
-cp.b 0x48000000 0x7e0000 <size>
-bootaux 0x7e0000
-```
-
----
-
-### UART3 im lặng hoàn toàn dù `bootaux` báo PC hợp lệ
-
-**Triệu chứng:** `bootaux` chạy thành công (`pc = 0x80000E6D`, Thumb-mode hợp lệ), nhưng cổng COM5 không có bất kỳ dữ liệu nào ra/vào.
-
-**Cách phát hiện:** Đọc trực tiếp `app.overlay` đang dùng:
+### Khối 1: Định nghĩa thực thể độc lập (`&{/soc}`)
 
 ```dts
-pinctrl {
-    uart3_dummy: uart3_dummy {
-        /* RỖNG — không có group0/pinmux bên trong */
-    };
-};
-```
-
-**Nguyên nhân gốc (2 lớp):**
-
-1. **Node pinctrl rỗng** → khi Zephyr build, tạo ra pinctrl state có 0 phần tử. Driver UART gọi `pinctrl_apply_state()` lúc init nhưng **không cấu hình bất kỳ chân vật lý nào**. Hệ thống hoàn toàn phụ thuộc vào những gì U-Boot poke tay còn sót lại.
-    
-2. **Địa chỉ thanh ghi poke tay từ U-Boot trước đó bị sai.** Đối chiếu với bảng pinmux chính thức do NXP tự sinh cho đúng chip (MIMX8ML8DVNLZ, lấy từ repo `hal_nxp`), địa chỉ đúng là:
-    
-    |Chân|Chức năng|MUX reg|Giá trị|DAISY reg|Giá trị|PAD/config reg|
-    |---|---|---|---|---|---|---|
-    |ECSPI1_SCLK → UART3_RX|RX|`0x303301e0`|`1`|`0x303305f8`|`4`|`0x30330440`|
-    |ECSPI1_MOSI → UART3_TX|TX|`0x303301e4`|`1`|_(không cần)_|—|`0x30330444`|
-    
-    Các địa chỉ từng dùng trước đó (`0x303300ec`, `0x303300e4`, `0x303302dc`, `0x303305ec`) **không khớp** với bảng chính thức này.
-    
-
-**Giải pháp:** Định nghĩa đúng pinmux ngay trong `app.overlay` bằng các phandle có sẵn trong SDK Zephyr (không cần poke tay từ U-Boot nữa — Zephyr tự cấu hình lại đúng mỗi lần boot):
-
-```dts
-&pinctrl {
-    uart3_ecspi1_default: uart3_ecspi1_default {
-        group0 {
-            pinmux = <&iomuxc_ecspi1_sclk_uart_rx_uart3_rx>,
-                     <&iomuxc_ecspi1_mosi_uart_tx_uart3_tx>;
-            bias-pull-up;
-            slew-rate = "slow";
-            drive-strength = "x1";
-        };
-    };
+&{/soc} {
+	uart3: uart@30880000 {
+		compatible = "nxp,imx-iuart";
+		reg = <0x30880000 0x10000>;
+		interrupts = <28 3>;
+		clocks = <&ccm IMX_CCM_UART3_CLK 0x6c 24>;
+		status = "disabled";
+	};
 };
 
-&uart4 {                      /* label "uart4" trong Zephyr = UART3 vật lý sau khi override reg */
-    /delete-property/ reg;
-    /delete-property/ interrupts;
-    reg = <0x30880000 0x4000>;
-    interrupts = <28 0>;
-    status = "okay";
-    current-speed = <115200>;
-    pinctrl-0 = <&uart3_ecspi1_default>;
-    pinctrl-names = "default";
-};
 ```
 
----
+* **Mục đích:** Khai báo và cấy một nút phần cứng hoàn toàn mới vào cấu trúc bus trung tâm (`/soc`) của vi xử lý i.MX8MP.
 
-### Bad device specification mmc 0` khi `fatload`
 
-**Triệu chứng:**
+* **Chi tiết thành phần:**
+* `uart3: uart@30880000`: Đặt nhãn gọi nhanh là `uart3` gắn với địa chỉ gốc vật lý của UART3.
 
-```
-u-boot=> fatload mmc 0:1 0x48000000 zephyr.bin
-** Bad device specification mmc 0 **
-```
 
-**Nguyên nhân:** Board có cả eMMC on-board lẫn khe SD rời — chỉ số thiết bị (`mmc0`, `mmc1`, `mmc2`...) không cố định, phụ thuộc cách U-Boot enumerate.
+* `compatible = "nxp,imx-iuart"`: Khai báo định danh để hệ điều hành kích hoạt đúng driver mã nguồn điều khiển cấu trúc UART của NXP.
 
-**Giải pháp:**
 
-```
-u-boot=> mmc list
-u-boot=> mmc dev <đúng_index>
-u-boot=> fatls mmc <đúng_index>:1     # xác nhận file có mặt trước khi fatload
-```
+* `reg`: Ánh xạ dải thanh ghi vật lý của khối UART3 từ địa chỉ `0x30880000` với độ rộng bộ nhớ 64KB.
 
----
 
-### UART3 có tín hiệu nhưng ký tự ra **vỡ vụn / rác** (lỗi baudrate)
+* `interrupts`: Cấp luồng ngắt phần cứng số 28 (ID ngắt của UART3 trên i.MX8MP).
 
-**Triệu chứng:** Sau khi sửa xong pinctrl (mục 3), UART3 đã có tín hiệu thật (không còn im lặng), nhưng ký tự hiển thị trên terminal là các ký tự lạ, không phải baud mismatch do cài sai tốc độ terminal.
 
-**Cách phát hiện nguyên nhân:** Đọc trực tiếp mã nguồn driver `drivers/clock_control/clock_control_mcux_ccm.c` trong Zephyr:
+* `clocks`: Đấu luồng xung nhịp gốc vào đúng trục phát `IMX_CCM_UART3_CLK` với tần số nền 24 MHz để triệt tiêu hoàn toàn lỗi lệch tần số bit gây vỡ ký tự.
 
-```c
-case IMX_CCM_UART1_CLK ... IMX_CCM_UART4_CLK: {
-    uint32_t instance = clock_name & IMX_CCM_INSTANCE_MASK;
-    clock_root_control_t clk_root = uart_clk_root[instance];
-    uint32_t uart_mux = CLOCK_GetRootMux(clk_root);   // đọc THẬT từ thanh ghi CCM phần cứng
 
-    if (uart_mux == 0)      *rate = MHZ(24);
-    else if (uart_mux == 1) *rate = CLOCK_GetPllFreq(...) / preDiv / postDiv / 10;
-}
-```
 
-**Nguyên nhân gốc:** `app.overlay` đã override `reg` và `interrupts` sang địa chỉ vật lý UART3, **nhưng không override `clocks`** — property này vẫn kế thừa từ node gốc:
 
-```dts
-clocks = <&ccm IMX_CCM_UART4_CLK 0x6c 24>;   /* vẫn là UART4! */
-```
 
-→ Driver đọc **thanh ghi clock root thật của UART4** (CCM_TARGET_ROOT) để tính bộ chia baudrate, trong khi phần cứng đang chạy thực sự là **UART3** (có thể có mux/divider clock khác). Baudrate tính sai → ký tự ra bị lệch tần số bit, thành ký tự vỡ vụn — chứ không mất tín hiệu hoàn toàn (đúng như quan sát).
-
-**Giải pháp:**
-
-```dts
-&uart4 {
-    ...
-    clocks = <&ccm IMX_CCM_UART3_CLK 0x6c 24>;   /* đổi đúng sang UART3 */
-    ...
-};
-```
-
-Header `imx_ccm.h` (chứa định nghĩa `IMX_CCM_UART3_CLK`) đã được include sẵn từ `nxp_imx8ml_m7.dtsi` gốc, không cần thêm `#include` trong overlay.
-
----
-
-## `app.overlay` cuối cùng (đã hoạt động hoàn chỉnh)
+### Khối 2: Định tuyến chân vật lý ngoài bo mạch (`&pinctrl`)
 
 ```dts
 &pinctrl {
@@ -193,61 +58,137 @@ Header `imx_ccm.h` (chứa định nghĩa `IMX_CCM_UART3_CLK`) đã được inc
 	};
 };
 
-&uart4 {
-	/delete-property/ reg;
-	/delete-property/ interrupts;
+```
 
-	reg = <0x30880000 0x4000>;
-	interrupts = <28 0>;
-	clocks = <&ccm IMX_CCM_UART3_CLK 0x6c 24>;
+* **Mục đích:** Cấu hình ma trận chân (Pin Multiplexing) thuộc khối điều khiển IOMUXC của chip i.MX8MP.
+
+
+* **Chi tiết thành phần:**
+* `pinmux`: Tiến hành mượn chân chức năng `ECSPI1_SCLK` bẻ hướng làm đường nhận dữ liệu `UART3_RX`, và chân `ECSPI1_MOSI` làm đường phát dữ liệu `UART3_TX`.
+
+
+* `bias-pull-up`: Kích hoạt điện trở kéo lên nội bộ cho chân RX nhằm triệt tiêu nhiễu đường truyền khi không có dữ liệu.
+
+
+
+
+
+### Khối 3: Kích hoạt ngoại vi (`&uart3`)
+
+```dts
+&uart3 {
 	status = "okay";
 	current-speed = <115200>;
-
 	pinctrl-0 = <&uart3_ecspi1_default>;
 	pinctrl-names = "default";
 };
 
-/ {
-	chosen {
-		zephyr,app-uart = &uart4;
-		zephyr,console = &uart4;
-	};
-};
 ```
 
----
+* **Mục đích:** Đóng gói và đưa khối ngoại vi vào trạng thái sẵn sàng hoạt động.
 
-## Boot scripting
-Sau khi đã sửa toàn bộ chỉ cần boot bằng 
 
-	fatload mmc 1:1 0x48000000 zephyr.bin
-	
-	cp.b 0x48000000 0x7e0000 <zephyr.bin size>
-	
-   	bootaux 0x7e0000
+* **Chi tiết thành phần:** Chuyển `status` từ khóa (`disabled`) sang mở (`okay`), thiết lập tốc độ truyền nhận chuẩn 115200 bps và áp đặt cụm chân vật lý đã cấu hình ở Khối 2 vào làm cửa ngõ giao tiếp chính thức.
 
-Hoặc gõ trên U-boot console như sau:
 
-	u-boot=> setenv mmcdev 1
-	
-	u-boot=> setenv m7image zephyr.bin
-	
-	u-boot=> setenv m7loadaddr 0x48000000
-	
-	u-boot=> setenv m7runaddr 0x7e0000
-	
-	u-boot=> setenv bootm7 'mmc dev ${mmcdev}; fatload mmc ${mmcdev}:1 ${m7loadaddr} ${m7image}; cp.b ${m7loadaddr} ${m7runaddr} ${filesize}; bootaux ${m7runaddr}'
-	
-	u-boot=> setenv bootcmd 'run bootm7; run distro_bootcmd'
-	
-	u-boot=> saveenv
+
+### Khối 4: Điều hướng luồng hệ thống (`chosen`)
+
+```dts
+/ {
+	chosen {
+		zephyr,app-uart = &uart3;
+		zephyr,console = &uart3;
+	};
+};
+
+```
+
+* **Mục đích:** Chỉ thị cho tầng ứng dụng của hệ điều hành Zephyr bẻ toàn bộ luồng xuất log màn hình (`console`) và luồng giao tiếp dữ liệu (`app-uart`) đổ dồn về thực thể `uart3` độc lập vừa thiết lập.
+
+
 
 ---
 
-## Bài học rút ra
+## 2. Giải thích các hàm cốt lõi trong Mã nguồn Ứng dụng (`main.c`)
 
-1. **Không nên poke thanh ghi IOMUXC thủ công từ U-Boot** rồi hy vọng Zephyr "không đụng vào" — cách bền vững là định nghĩa đúng trong devicetree để chính Zephyr tự cấu hình lại mỗi lần boot, tránh phụ thuộc trạng thái sót lại từ bootloader.
-2. Khi **remap một peripheral node** (đổi `reg`/`interrupts` để trỏ sang phần cứng vật lý khác), phải rà soát **toàn bộ property phụ thuộc phần cứng** đi kèm — không chỉ `reg`/`interrupts`/`pinctrl`, mà cả `clocks`, vì driver có thể đọc trực tiếp thanh ghi phần cứng dựa trên ID clock khai báo trong devicetree, độc lập với `reg`.
-3. Triệu chứng **"im lặng hoàn toàn"** thường chỉ ra vấn đề ở tầng **pinmux/routing** (chưa có đường tín hiệu vật lý); triệu chứng **"có tín hiệu nhưng dữ liệu sai/vỡ"** thường chỉ ra vấn đề ở tầng **clock/baudrate** — hai tầng lỗi độc lập, cần tách riêng để debug đúng hướng.
-4. Bảng pinmux tự sinh bởi công cụ chính thức của NXP (trong `hal_nxp`, dùng bởi Zephyr SDK) là nguồn tham chiếu đáng tin cậy nhất cho địa chỉ thanh ghi IOMUXC — nên đối chiếu tại đây trước khi tự tra cứu bằng tay từ reference manual.
+Mã nguồn C thực hiện tác vụ nhận diện ký tự bằng cơ chế Polling (vòng lặp kiểm tra trạng thái liên tục) thông qua các dòng lệnh bản chất sau:
 
+* **`static const struct device *const uart_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_app_uart));`**
+* *Ý nghĩa:* Đây là lệnh liên kết tối cao giữa phần mềm và phần cứng. Macro `DT_CHOSEN` đi tìm xem nhãn `zephyr,app-uart` trong overlay đang trỏ vào đâu (đang trỏ vào `&uart3`). Sau đó, `DEVICE_DT_GET` bốc ra cấu trúc driver điều khiển tương ứng và gán vào biến con trỏ `uart_dev`. Dòng này giúp code C độc lập hoàn toàn với phần cứng (Hardware Agnostic).
+
+
+
+
+* **`device_is_ready(uart_dev)`**
+* *Ý nghĩa:* Hàm kiểm tra an toàn hệ thống. Nó xác nhận xem driver cấu hình của UART3 đã hoàn tất khởi tạo thành công trong hệ thống hay chưa trước khi cho phép ứng dụng can thiệp.
+
+
+* **`uart_poll_in(uart_dev, &c)`**
+* *Ý nghĩa:* Hàm đọc dữ liệu không chặn (Non-blocking). Hệ thống sẽ liên tục kiểm tra thanh ghi nhận dữ liệu (RX FIFO) của UART3. Nếu bộ đệm trống, hàm trả về giá trị khác 0 và bỏ qua; nếu người dùng gõ một ký tự từ bàn phím, hàm trả về 0 và trích xuất ký tự đó lưu vào biến `c`.
+
+
+
+
+* **`uart_poll_out(uart_dev, c)`**
+* *Ý nghĩa:* Hàm phát dữ liệu. Ngay khi biến `c` nhận ký tự mới, hàm này lập tức đẩy ký tự đó vào thanh ghi truyền (TX FIFO) của UART3 để dội ngược dữ liệu hiển thị lên màn hình terminal COM5 của máy tính.
+
+
+
+
+
+---
+
+## 3. Quy trình Biên dịch (Build Firmware)
+
+Để loại bỏ hoàn toàn hiện tượng kẹt bộ nhớ cache của CMake/Ninja khiến file binary không cập nhật đúng mã máy mới (lỗi đứng im dung lượng file), quy trình biên dịch bắt buộc phải sử dụng tham số làm sạch chuyên dụng (`-p always` / `--pristine`):
+
+```bash
+# Di chuyển vào thư mục ứng dụng
+cd ~/zephyrproject/uart_echo
+
+# Kích hoạt môi trường ảo chứa West (Nếu chưa kích hoạt)
+source ../.venv/bin/activate
+
+# Biên dịch sạch hoàn toàn cho mục tiêu lõi M7
+west build -p always -b imx8mp_evk/mimx8ml8/m7 .
+
+```
+
+> **Lưu ý:** Việc sử dụng tham số `-p always` sẽ ép West xóa toàn bộ thư mục `build/` cũ, quét lại toàn bộ file `app.overlay` mới dứt điểm để sinh ra file `zephyr.bin` chuẩn xác nhất.
+> 
+> 
+
+---
+
+## 4. Kịch bản Tự động Khởi động lõi M7 từ U-Boot (Autoboot Script)
+
+Thay vì phải gõ thủ công chuỗi lệnh cấu hình thanh ghi phức tạp mỗi lần bật nguồn bo mạch, chúng ta sẽ đóng gói toàn bộ quy trình cấu hình Clock, định tuyến chân vật lý của i.MX8MP, nạp trung chuyển file từ thẻ nhớ MicroSD và kích hoạt lõi M7 thông qua việc tạo một biến môi trường Macro tự chạy trong U-Boot.
+
+Bạn mở cổng **COM4**, bật nguồn bo mạch và nhấn một phím bất kỳ để dừng quá trình boot tự động, truy cập vào dấu nhắc lệnh `u-boot=>`. Tiến hành copy và chạy khối lệnh sau:
+
+```text
+# 1. Tạo macro tự động cấu hình phần cứng, nạp trung chuyển và ra lệnh bootaux
+setenv boot_m7 'clk setfreq uart3 80000000; mw.l 0x303301e0 0x1; mw.l 0x303301e4 0x1; mw.l 0x303305f8 0x4; mw.l 0x30330440 0x140; if fatload mmc 1:1 0x80000000 zephyr.bin; then bootaux 0x80000000; fi'
+
+# 2. Chèn macro này vào đầu chuỗi lệnh khởi động mặc định (bootcmd) của bo mạch
+setenv orig_bootcmd '${bootcmd}'
+setenv bootcmd 'run boot_m7; run orig_bootcmd'
+
+# 3. Lưu lại cấu hình vĩnh viễn vào bộ nhớ ROM của bo mạch
+saveenv
+
+```
+
+### Cơ chế hoạt động của Script tự động:
+
+1. **Thiết lập hạ tầng:** Hạ tần số clock UART3 về mức an toàn 24 MHz từ U-Boot.
+
+
+2. **Định tuyến Pinmux dự phòng:** Đục tường cấu hình các thanh ghi vật lý (`0x303301e0`, `0x303301e4`, `0x303305f8`) để mở sẵn đường vật lý cho cổng COM5 trước khi hệ điều hành Zephyr chiếm quyền kiểm soát toàn diện.
+
+
+3. **Kiểm tra và Nạp:** Lệnh `fatload` sẽ kiểm tra phân vùng `1:1` trên thẻ nhớ. Nếu tìm thấy file `zephyr.bin`, nó sẽ nạp tạm vào địa chỉ RAM an toàn `0x80000000`.
+
+
+4. **Kích hoạt:** Lệnh `bootaux 0x80000000` lập tức giải phóng trạng thái Reset của lõi Cortex-M7, ép lõi phụ nhảy vào thực thi firmware ứng dụng độc lập. Sau đó, hệ thống tiếp tục trả quyền điều khiển cho lệnh `orig_bootcmd` để lõi chính A53 tải hệ điều hành Linux một cách song song, độc lập và mượt mà.
