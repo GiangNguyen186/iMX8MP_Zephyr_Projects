@@ -168,15 +168,13 @@ Thay vì phải gõ thủ công chuỗi lệnh cấu hình thanh ghi phức tạ
 Bạn mở cổng **COM4**, bật nguồn bo mạch và nhấn một phím bất kỳ để dừng quá trình boot tự động, truy cập vào dấu nhắc lệnh `u-boot=>`. Tiến hành copy và chạy khối lệnh sau:
 
 ```text
-# 1. Tạo macro tự động cấu hình phần cứng, nạp trung chuyển và ra lệnh bootaux
-setenv boot_m7 'clk setfreq uart3 80000000; mw.l 0x303301e0 0x1; mw.l 0x303301e4 0x1; mw.l 0x303305f8 0x4; mw.l 0x30330440 0x140; if fatload mmc 1:1 0x80000000 zephyr.bin; then bootaux 0x80000000; fi'
-
-# 2. Chèn macro này vào đầu chuỗi lệnh khởi động mặc định (bootcmd) của bo mạch
-setenv orig_bootcmd '${bootcmd}'
-setenv bootcmd 'run boot_m7; run orig_bootcmd'
-
-# 3. Lưu lại cấu hình vĩnh viễn vào bộ nhớ ROM của bo mạch
-saveenv
+u-boot=> setenv mmcdev 1
+u-boot=> setenv m7image zephyr.bin
+u-boot=> setenv m7loadaddr 0x48000000
+u-boot=> setenv m7runaddr 0x7e0000
+u-boot=> setenv bootm7 'mmc dev ${mmcdev}; fatload mmc ${mmcdev}:1 ${m7loadaddr} ${m7image}; cp.b ${m7loadaddr} ${m7runaddr} ${filesize}; bootaux ${m7runaddr}'
+u-boot=> setenv bootcmd 'run bootm7; run distro_bootcmd'
+u-boot=> saveenv
 
 ```
 
