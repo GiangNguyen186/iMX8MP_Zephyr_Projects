@@ -2,7 +2,7 @@
 
 ---
 
-## 1. Giải thích chi tiết File Cấu hình Phần cứng (`app.overlay`)
+## 1. Cấu hình File Cấu hình Phần cứng (`app.overlay`)
 
 Để đảm bảo tính toàn vẹn của hệ thống và không chiếm dụng tài nguyên của cổng UART4, file `app.overlay` được thiết kế chia làm 4 khối logic độc lập, tường minh:
 
@@ -110,7 +110,7 @@
 
 ---
 
-## 2. Giải thích các hàm cốt lõi trong Mã nguồn Ứng dụng (`main.c`)
+## 2. Các hàm cốt lõi trong Mã nguồn Ứng dụng (`main.c`)
 
 Mã nguồn C thực hiện tác vụ nhận diện ký tự bằng cơ chế Polling (vòng lặp kiểm tra trạng thái liên tục) thông qua các dòng lệnh bản chất sau:
 
