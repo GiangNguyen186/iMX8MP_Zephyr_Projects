@@ -178,6 +178,8 @@ u-boot=> saveenv
 
 ```
 
+---
+
 ### Cơ chế hoạt động của Script tự động:
 
 1. **Thiết lập hạ tầng:** Hạ tần số clock UART3 về mức an toàn 24 MHz từ U-Boot.
