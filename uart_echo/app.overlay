@@ -1,3 +1,13 @@
+&{/soc} {
+	uart3: uart@30880000 {
+		compatible = "nxp,imx-iuart";
+		reg = <0x30880000 0x10000>;
+		interrupts = <28 3>;
+		clocks = <&ccm IMX_CCM_UART3_CLK 0x6c 24>;
+		status = "disabled";
+	};
+};
+
 &pinctrl {
 	uart3_ecspi1_default: uart3_ecspi1_default {
 		group0 {
@@ -10,23 +20,16 @@
 	};
 };
 
-&uart4 {
-	/delete-property/ reg;
-	/delete-property/ interrupts;
-
-	reg = <0x30880000 0x4000>;
-	interrupts = <28 0>;
-	clocks = <&ccm IMX_CCM_UART3_CLK 0x6c 24>;
+&uart3 {
 	status = "okay";
 	current-speed = <115200>;
-
 	pinctrl-0 = <&uart3_ecspi1_default>;
 	pinctrl-names = "default";
 };
 
 / {
 	chosen {
-		zephyr,app-uart = &uart4;
-		zephyr,console = &uart4;
+		zephyr,app-uart = &uart3;
+		zephyr,console = &uart3;
 	};
 };
